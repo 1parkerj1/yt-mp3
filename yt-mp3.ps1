@@ -2,9 +2,21 @@ param(
     [Alias("f")]
     [string]$FilePath,
     [string]$URL,
-    [Alias("h", "help", "?")]
+    [Alias("h","help","?")]
     [switch]$Help
 )
+
+function Show-Usage {
+    Write-Host "Usage:"
+    Write-Host "  yt-mp3 <url>"
+    Write-Host "  yt-mp3 -f <folder_path> <url>"
+    Write-Host "  yt-mp3 -h"
+}
+
+if ($Help -or (-not $URL -and -not $FilePath)) {
+    Show-Usage
+    exit 0
+}
 
 $DEFAULT_PATH = "%USERPROFILE%\Music\yt-mp3"
 $CONFIG_PATH = Join-Path $PSScriptRoot "yt-mp3-config.json"
