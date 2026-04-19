@@ -1,97 +1,137 @@
 param(
+    [Parameter()]
     [Alias("f")]
-    [string]$FilePath,
+    [string]$Folder,
+
+    [Parameter(Position = 0)]
     [string]$URL,
-    [Alias("h","help","?")]
+
+    [Alias("h","?")]
     [switch]$Help
 )
 
-function Show-Usage {
-    Write-Host "Usage:"
-    Write-Host "  yt-mp3 <url>"
-    Write-Host "  yt-mp3 -f <folder_path> <url>"
-    Write-Host "  yt-mp3 -h"
-}
+$DEFAULT_PATH = Join-Path $env:USERPROFILE "Music\yt-mp3"
+$CONFIG_DIR   = Join-Path $env:APPDATA "yt-mp3"
+$CONFIG_PATH  = Join-Path $CONFIG_DIR "config.json"
 
-if ($Help -or (-not $URL -and -not $FilePath)) {
-    Show-Usage
-    exit 0
-}
-
-$DEFAULT_PATH = "%USERPROFILE%\Music\yt-mp3"
-$CONFIG_PATH = Join-Path $PSScriptRoot "yt-mp3-config.json"
-
-function Show-Help{
-    Write-Host "Usage: ytmp3 [-f folder_path] url"
+function Show-Help {
     Write-Host ""
-    Write-Host "Options:"
-    Write-Host "  -f, --folder   Specify the folder to save downloaded MP3 files. If not provided, the default path will be used."
-    Write-Host "  -h, --help     Show this help message and exit."
+    Write-Host "  yt-mp3 -f `"C:\Path\To\Folder`" (Set default save folder)"
+    Write-Host ""
+    Write-Host "  yt-mp3 `"https://youtube.com/...`" (Download audio from YouTube video)"
+    Write-Host ""
+    Write-Host "  If no folder has been set yet, the default will be:"
+    Write-Host "  $DEFAULT_PATH"
+    Write-Host ""
 }
 
-if ($Help -or (-not $URL -and -not $FilePath)) {
+function Ensure-ConfigDir {
+    if (-not (Test-Path $CONFIG_DIR)) {
+        New-Item -ItemType Directory -Path $CONFIG_DIR -Force | Out-Null
+    }
+}
+
+function Get-SaveDir {
+    if (Test-Path $CONFIG_PATH) {
+        try {
+            $config = Get-Content $CONFIG_PATH -Raw | ConvertFrom-Json
+            if ($config.SaveDir -and $config.SaveDir.Trim() -ne "") {
+                if (Test-IsUrl $config.SaveDir) {
+                    Write-Warning "Config save folder is invalid (URL). Resetting to default: $DEFAULT_PATH"
+                } else {
+                    return $config.SaveDir
+                }
+            }
+        }
+        catch {
+            Write-Warning "Could not read config. Falling back to default folder."
+        }
+    }
+
+    if (-not (Test-Path $DEFAULT_PATH)) {
+        New-Item -ItemType Directory -Path $DEFAULT_PATH -Force | Out-Null
+    }
+
+    Set-SaveDir $DEFAULT_PATH
+    return $DEFAULT_PATH
+}
+
+function Set-SaveDir([string]$Path) {
+    Ensure-ConfigDir
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        Write-Error "Save folder cannot be empty."
+        exit 1
+    }
+
+    if (Test-IsUrl $Path) {
+        Write-Error "Invalid save folder: '$Path' looks like a URL. Use -f with a local folder path."
+        exit 1
+    }
+
+    try {
+        if (-not (Test-Path -LiteralPath $Path)) {
+            New-Item -ItemType Directory -Path $Path -Force -ErrorAction Stop | Out-Null
+        }
+    }
+    catch {
+        Write-Error "Could not create/access save folder '$Path'. $($_.Exception.Message)"
+        exit 1
+    }
+
+    @{ SaveDir = $Path } | ConvertTo-Json | Set-Content -Path $CONFIG_PATH -Encoding UTF8
+}
+
+function Test-Dependency([string]$CommandName) {
+    return $null -ne (Get-Command $CommandName -ErrorAction SilentlyContinue)
+}
+
+function Test-IsUrl([string]$Value) {
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $false }
+    return $Value -match '^[a-zA-Z][a-zA-Z0-9+\-.]*://'
+}
+
+if ($Help -or (-not $Folder -and -not $URL)) {
     Show-Help
     exit 0
 }
 
-function Get-SaveDir {
-    if (Test-Path -path $CONFIG_PATH) {
-        try {
-            $config = Get-Content -Path $CONFIG_PATH | ConvertFrom-Json
-            if ($config.SAVE_DIR) {
-                return [string]$config.SAVE_DIR
-            }
-        } catch {
-            Write-Warning "Warning: Failed to read config file. Using default path."
-        }
-    }
-    return $DEFAULT_PATH
-}
-
-function Set-SaveDir([string]$path) {
-    @{ SAVE_DIR = $path } | ConvertTo-Json | Set-Content -Path $CONFIG_PATH -Encoding UTF8
-}
-
-if (-not (Get-Command yt-dlp -ErrorAction SilentlyContinue)) {
-    Write-Error "Error: yt-dlp is not installed or not in PATH."
+if (-not (Test-Dependency "yt-dlp")) {
+    Write-Error "yt-dlp is not installed or not in PATH."
     exit 1
 }
 
-if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
-    Write-Error "Error: ffmpeg is not installed or not in PATH."
+if (-not (Test-Dependency "ffmpeg")) {
+    Write-Error "ffmpeg is not installed or not in PATH."
     exit 1
 }
 
-$SAVE_DIR = if ($Folder) { $Folder } else { Get-SaveDir }
 if ($Folder) {
-    if (-not (Test-Path -Path $SAVE_DIR)) {
-        New-Item -ItemType Directory -Path $SAVE_DIR -Force | Out-Null
+    Set-SaveDir $Folder
+    Write-Host "Default save folder set to: $Folder"
+    exit 0
+}
+
+if ($URL) {
+    $SaveDir = Get-SaveDir
+
+    if (Test-IsUrl $SaveDir) {
+        Write-Error "Saved folder is invalid ('$SaveDir'). Run: yt-mp3 -f ""C:\Path\To\Folder"""
+        exit 1
     }
-    Set-SaveDir -path $SAVE_DIR
-    Write-Host "Default save folder updated to: $SAVE_DIR"
 
-    if (-not $URL) {
-        Write-Host "No URL provided. Exiting."
-        exit 0
+    Write-Host "Downloading audio from $URL..."
+
+    yt-dlp --quiet --no-warnings --no-progress `
+        -x --audio-format mp3 --audio-quality 0 `
+        -o (Join-Path $SaveDir "%(title)s.%(ext)s") `
+        $URL
+
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "yt-dlp failed to download the audio."
+        exit 1
     }
+
+    Write-Host "Download completed. Audio saved to $SaveDir."
+    exit 0
 }
-
-if (-not $URL) {
-    Write-Error "Usage: ytmp3 [-f folder_path] url"
-    exit 1
-}
-
-if (-not (Test-Path -Path $SAVE_DIR)) {
-    New-Item -ItemType Directory -Path $SAVE_DIR -Force | Out-Null
-}
-
-write-Host "Downloading audio from $URL..."
-
-yt-dlp -x --audio-format mp3 --audio-quality 0 -o (Join-Path $SAVE_DIR "%(title)s.%(ext)s") $URL
-
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "Error: yt-dlp failed to download the audio."
-    exit 1
-}
-
-write-Host "Download completed. Audio saved to $SAVE_DIR."
