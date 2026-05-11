@@ -1,11 +1,10 @@
 ## yt-mp3
 
-### Prerequistes:
+### Prerequisites:
 - install yt-dlp and ffmpeg
 - https://github.com/yt-dlp/yt-dlp/wiki/Installation
 - https://ffmpeg.org/download.html
-
-### Add the yt-mp3 directory to path after downloading
+- Add the yt-mp3 directory to path after downloading
 
 ### Usage:
 - `yt-mp3 -f "C:\Path\To\Folder"` (set default save folder path)
